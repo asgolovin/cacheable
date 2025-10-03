@@ -6,7 +6,7 @@ from dataclass_wizard import JSONWizard
 
 @dataclass
 class AbstractParams(JSONWizard):
-    pass
+    run_tag = ""
 
 
 def deepcopy(params):

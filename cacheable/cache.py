@@ -14,8 +14,8 @@ import pandas as pd
 from dotenv import dotenv_values
 from tqdm import tqdm
 
-if __name__ != "__main__":
-    from .params import Params, params_from_json, params_to_json
+if __name__ != '__main__':
+    from .params import AbstractParams, params_from_json, params_to_json
 
 
 class Cacheable(ABC):
@@ -62,8 +62,7 @@ class Cacheable(ABC):
         logger.info(f"Creating {self.name} from scratch...")
         # select the params that the object depends on
         kwargs = {
-            param_name: getattr(self.params, param_name)
-            for param_name in self.depends_on_params
+            param_name: getattr(self.params, param_name) for param_name in self.depends_on_params
         }
         self.obj: Any = self.create(*args, **kwargs)
         logger.info(f"✔️ Successfully created {self.name}")
@@ -297,6 +296,4 @@ if __name__ == "__main__":
 
     A_obj = A(params).compute()  # should load from a folder with an empty tag
 
-    C_obj = C.load_from_file(
-        Path("cache/C/C_first_tag_138766291a1c4f4af7358fa7cfc9179735a043dc")
-    )
+    C_obj = C.load_from_file(Path("cache/C/C_first_tag_138766291a1c4f4af7358fa7cfc9179735a043dc"))
