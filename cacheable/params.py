@@ -6,7 +6,10 @@ from dataclass_wizard import JSONWizard
 
 @dataclass
 class AbstractParams(JSONWizard):
-    run_tag = ""
+    class _(JSONWizard.Meta):
+        skip_defaults = False
+
+    run_tag: str = ""
 
 
 def deepcopy(params):

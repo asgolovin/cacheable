@@ -5,6 +5,8 @@ except ImportError:
     print("Pytest not installed - install with `poetry install --with tests`")
     raise
 
+from dataclass_wizard import JSONWizard
+
 import json
 from pathlib import Path
 from time import sleep
@@ -25,15 +27,17 @@ if Path(cache_folder).exists():
 
 
 @dataclass
-class Params(AbstractParams):
+class Params(JSONWizard):
     """Mock params for testing purposes."""
 
-    A1 = "A1 param"
-    A2 = "A2 param"
-    A3 = "A3 param"
-    B1 = "B1 param"
-    C1 = "C1 param"
-    C2 = "C2 param"
+    run_tag: str = "uaie"
+
+    A1: str = "A1 param"
+    A2: str = "A2 param"
+    A3: str = "A3 param"
+    B1: str = "B1 param"
+    C1: str = "C1 param"
+    C2: str = "C2 param"
 
 
 class A(Cacheable):
