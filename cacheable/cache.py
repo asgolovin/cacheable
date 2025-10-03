@@ -14,8 +14,7 @@ import pandas as pd
 from dotenv import dotenv_values
 from tqdm import tqdm
 
-if __name__ != '__main__':
-    from .params import AbstractParams, params_from_json, params_to_json
+from .params import params_from_json, params_to_json
 
 
 class Cacheable(ABC):
@@ -41,7 +40,7 @@ class Cacheable(ABC):
     def __init__(self, params):
         self.params = params
         _ = self.cache_folder  # trigger the creation of the cache folder
-        self.logger = logging.getLogger("data")
+        self.logger = logging.getLogger("cache")
 
     def compute(self, *args):
         cache_folder = self.cache_folder
@@ -78,7 +77,9 @@ class Cacheable(ABC):
         }
         cache_folder = os.environ.get("CACHE_FOLDER", config.get("CACHE_FOLDER"))
         if cache_folder is None:
-            raise ValueError("CACHE_FOLDER is not set in .env file")
+            raise ValueError(
+                "The CACHE_FOLDER environment variable is not set. Add it to your .env file."
+            )
         cache_folder = Path(cache_folder)
 
         object_folder = cache_folder / self.name
@@ -188,112 +189,3 @@ class Cacheable(ABC):
     def save(self) -> None:
         """Save the object to cache"""
         pass
-
-
-# A script to test the class
-if __name__ == "__main__":
-
-    class A(Cacheable):
-        depends_on_obj = ()
-        depends_on_params = ("A1", "A2", "A3")
-        name = "A"
-
-        def create(self, A1, A2, A3):
-            for _i in tqdm(range(100)):
-                sleep(0.1)
-            return f"I am the object A with params {A1}, {A2}, {A3}"
-
-        @classmethod
-        def load_from_file(cls, path):
-            file = path / "A.txt"
-            with open(file) as f:
-                return f.read()
-
-        def save(self):
-            file = self.cache_folder / "A.txt"
-            with open(file, "w") as f:
-                f.write(self.obj)
-
-    class B(Cacheable):
-        depends_on_obj = ()
-        depends_on_params = ("A3", "B1")
-        name = "B"
-
-        def create(self, A3, B1):
-            for _i in tqdm(range(100)):
-                sleep(0.1)
-            return pd.DataFrame({"A3": [A3], "B1": [B1]})
-
-        @classmethod
-        def load_from_file(cls, path):
-            file = path / "B.csv"
-            return pd.read_csv(file)
-
-        def save(self):
-            file = self.cache_folder / "B.csv"
-            self.obj.to_csv(file)
-
-    class C(Cacheable):
-        depends_on_obj = (A, B)
-        depends_on_params = ("C1", "C2")
-        name = "C"
-
-        def create(self, A, B, C1, C2):
-            for _i in tqdm(range(100)):
-                sleep(0.1)
-            return {"A": A, "B": B, "C1": C1, "C2": C2}
-
-        @classmethod
-        def load_from_file(cls, path):
-            file = path / "C.csv"
-            with open(file) as f:
-                return json.load(f)
-
-        def save(self):
-            file = self.cache_folder / "C.csv"
-            serial = {"C1": self.obj["C1"], "C2": self.obj["C2"]}
-            serial["A"] = str(self.obj["A"])
-            serial["B"] = str(self.obj["B"])
-            with open(file, "w") as f:
-                json.dump(serial, f)
-
-    @dataclass
-    class Params:
-        """Mock params for testing purposes."""
-
-        cache_folder = Path("./cache")
-        run_tag = "first_tag"
-        A1 = "A1 param"
-        A2 = "A2 param"
-        A3 = "A3 param"
-        B1 = "B1 param"
-        C1 = "C1 param"
-        C2 = "C2 param"
-
-    def params_to_json(params, path):
-        with open(path, "w") as f:
-            json.dump(params.__dict__, f, indent=4)
-
-    params = Params()
-
-    A_obj = A(params).compute()
-    B_obj = B(params).compute()
-    C_obj = C(params).compute(A_obj, B_obj)
-
-    params.run_tag = "second"
-
-    A_obj = A(params)  # should not create a new folder, but load from cache
-
-    params.run_tag = ""
-
-    A_obj = A(params).compute()  # should also load
-
-    params.A1 = "new A1"
-
-    A_obj = A(params).compute()  # should create a new folder with an empty tag
-
-    params.run_tag = "third"
-
-    A_obj = A(params).compute()  # should load from a folder with an empty tag
-
-    C_obj = C.load_from_file(Path("cache/C/C_first_tag_138766291a1c4f4af7358fa7cfc9179735a043dc"))
