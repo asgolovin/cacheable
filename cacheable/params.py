@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, KW_ONLY
 from pathlib import Path
 
 from dataclass_wizard import JSONWizard
@@ -8,6 +8,8 @@ from dataclass_wizard import JSONWizard
 class AbstractParams(JSONWizard):
     class _(JSONWizard.Meta):
         skip_defaults = False
+
+    _: KW_ONLY
 
     run_tag: str = ""
 
