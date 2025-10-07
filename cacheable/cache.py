@@ -1,20 +1,17 @@
 import hashlib
-import json
 import logging
 import os
 import re
-import shutil
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
 from typing import Any
+import toml
+import git
 
 import pandas as pd
 from dotenv import dotenv_values
-from tqdm import tqdm
 
-from .params import params_from_json, params_to_json
+import pickle
 
 
 class Cacheable(ABC):
@@ -33,16 +30,12 @@ class Cacheable(ABC):
     This is an abstract class; the subclasses need to implement the create, load, and save methods.
     """
 
-    depends_on_obj = ()
-    depends_on_params = ()
-    name = ""
-
-    def __init__(self, params):
-        self.params = params
-        _ = self.cache_folder  # trigger the creation of the cache folder
+    def __init__(self, run_tag=""):
+        self.run_tag = run_tag
+        self.name = self.__class__.__name__
         self.logger = logging.getLogger("cache")
 
-    def compute(self, *args):
+    def compute(self):
         cache_folder = self.cache_folder
         logger = self.logger
 
@@ -59,15 +52,89 @@ class Cacheable(ABC):
 
         # If the object is not in the cache, create it
         logger.info(f"Creating {self.name} from scratch...")
-        # select the params that the object depends on
-        kwargs = {
-            param_name: getattr(self.params, param_name) for param_name in self.depends_on_params
-        }
-        self.obj: Any = self.create(*args, **kwargs)
+        self.obj: Any = self.create()
         logger.info(f"✔️ Successfully created {self.name}")
         self.save()
         logger.info(f"Saved {self.name} to {cache_folder}")
         return self.obj
+
+    def load(self) -> Any:
+        path = self.cache_folder
+        try:
+            self.obj = self.load_from_file(path)
+            return self.obj
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                f"File {path} does not exist. Please run compute() first."
+            ) from e
+
+    @abstractmethod
+    def create(self) -> Any:
+        """Create a new object from scratch, without loading from cache"""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def load_from_file(cls, path) -> Any:
+        """Load the object from cache"""
+        pass
+
+    def save(self) -> None:
+        """Save the object to cache"""
+        self.cache_folder.mkdir(parents=True, exist_ok=True)
+        self.save_to_file(self.cache_folder)
+
+    @abstractmethod
+    def save_to_file(self, path) -> None:
+        pass
+
+    def register(self, path: str | Path, comment="", save_git_commit=True):
+        """
+        Create a mapping save_name -> hash of the object so that the object can be easily retrieved
+        later without recreating all input arguments.
+
+        Args:
+            path (str | Path): a path to a toml file where the mapping will be saved.
+            save_name (_type_): _description_
+            comment (str, optional): a longer description of the object.
+        """
+
+        # check that path has .toml extension
+        if not str(path).endswith(".toml"):
+            raise ValueError("The path must have a .toml extension")
+
+        metadata = {
+            "object_name": self.name,
+            "hash": self.hash(),
+            "comment": comment,
+            "run_tag": self.run_tag,
+            "cache_folder": str(self.cache_folder),
+            "created_at": str(pd.Timestamp.now()),
+            "created_by": os.environ.get("USER", "unknown"),
+        }
+
+        if save_git_commit:
+            try:
+                repo = git.Repo(search_parent_directories=True)
+                sha = repo.head.object.hexsha
+                metadata["git_commit"] = sha
+                metadata["git_repo"] = repo.remotes.origin.url
+            except git.exc.InvalidGitRepositoryError:
+                self.logger.warning("Not a git repository, skipping git commit hash")
+
+        # save the metadata to a file
+        folder = Path(path).parent
+        folder.mkdir(parents=True, exist_ok=True)
+
+        with open(path, 'w') as f:
+            toml.dump(metadata, f)
+
+    @classmethod
+    def load_from_register(cls, filename):
+        with open(filename, 'r') as f:
+            metadata = toml.load(f)
+        cache_folder = Path(metadata['cache_folder'])
+        return cls.load_from_file(cache_folder)
 
     @property
     def cache_folder(self):
@@ -91,32 +158,34 @@ class Cacheable(ABC):
         # If not, create a new folder. The folder has the following structure:
         # <class name>_<run_tag>_<hash>
         name_components = [self.name]
-        if len(self.params.run_tag) > 0:
-            name_components.append(self.params.run_tag)
-        name_components.append(self.hash(self.params))
+        if len(self.run_tag) > 0:
+            name_components.append(self.run_tag)
+        name_components.append(self.hash())
 
         folder_name = "_".join(name_components)
 
         path = object_folder / folder_name
-        path.mkdir(parents=True, exist_ok=True)
-
-        # save the params themselves to the cache folder
-        param_cache_path = path / "params.json"
-        if not param_cache_path.exists():
-            params_to_json(self.params, param_cache_path)
 
         return path
 
-    @classmethod
-    def hash(cls, params):
-        """Compute a hash of the parameters that the object depends on."""
+    def hash(self):
         hashstr = []
-        for parent_cls in cls.depends_on_obj:
-            hashstr.append(f"{parent_cls}: {parent_cls.hash(params)}")
-        for param_name in cls.depends_on_params:
-            param_value = getattr(params, param_name)
-            param_hash = hashlib.sha1(str(param_value).encode("UTF-8")).hexdigest()
-            hashstr.append(f"{param_name}: {param_hash}")
+
+        attributes = vars(self)
+
+        # exclude keys that should not change the object
+        exclude_keys = ["logger", "run_tag", "obj"]
+
+        for key in sorted(attributes.keys()):
+            if key in exclude_keys:
+                continue
+            value = attributes[key]
+            if isinstance(value, Cacheable):
+                value_hash = value.hash()
+            else:
+                value_hash = hashlib.sha1(pickle.dumps(value)).hexdigest()
+            hashstr.append(f"{key}: {value_hash}")
+
         hashstr = "\n".join(hashstr)
         hash = hashlib.sha1(hashstr.encode("UTF-8")).hexdigest()
         return hash
@@ -129,63 +198,37 @@ class Cacheable(ABC):
         if not object_folder.exists():
             return False
 
-        pattern = rf"{self.name}_(.*_)?{self.hash(self.params)}"
+        pattern = rf"{self.name}_(.*_)?{self.hash()}"
         for folder in object_folder.iterdir():
             if re.match(pattern, folder.name):
                 return folder
         return False
 
-    @classmethod
-    def fix_cache_folder(cls, old_folder):
-        """
-        A band-aid function in case I fucked up and need to update the hash in the name of the cache folder.
-        Load the object from the old folder, compute the hash of the object and rename the folder.
-        """
-        old_folder = Path(old_folder)
+    # @classmethod
+    # def fix_cache_folder(cls, old_folder):
+    #     """
+    #     A band-aid function in case I fucked up and need to update the hash in the name of the cache folder.
+    #     Load the object from the old folder, compute the hash of the object and rename the folder.
+    #     """
+    #     old_folder = Path(old_folder)
 
-        old_folder_name = old_folder.name
+    #     old_folder_name = old_folder.name
 
-        params_folder = old_folder / "params.json"
-        if not params_folder.exists():
-            raise FileNotFoundError(f"File {params_folder} does not exist")
+    #     params_folder = old_folder / "params.json"
+    #     if not params_folder.exists():
+    #         raise FileNotFoundError(f"File {params_folder} does not exist")
 
-        params = params_from_json(params_folder)
+    #     params = params_from_json(params_folder)
 
-        old_hash = old_folder_name.split("_")[-1]
-        new_hash = cls.hash(params)
+    #     old_hash = old_folder_name.split("_")[-1]
+    #     new_hash = cls.hash(params)
 
-        if old_hash == new_hash:
-            print("Hashes are the same, nothing to do")
-            return
+    #     if old_hash == new_hash:
+    #         print("Hashes are the same, nothing to do")
+    #         return
 
-        old_components = old_folder_name.split("_")[:-1]
-        new_folder_name = "_".join(old_components + [new_hash])
+    #     old_components = old_folder_name.split("_")[:-1]
+    #     new_folder_name = "_".join(old_components + [new_hash])
 
-        shutil.move(old_folder, old_folder.parent / new_folder_name)
-        print(f"Renamed {old_folder_name} to {new_folder_name}")
-
-    @abstractmethod
-    def create(self, *args, **kwargs) -> Any:
-        """Create a new object from scratch, without loading from cache"""
-        pass
-
-    def load(self) -> Any:
-        path = self.cache_folder
-        try:
-            self.obj = self.load_from_file(path)
-            return self.obj
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"File {path} does not exist. Please run compute() first."
-            ) from e
-
-    @classmethod
-    @abstractmethod
-    def load_from_file(cls, path) -> Any:
-        """Load the object from cache"""
-        pass
-
-    @abstractmethod
-    def save(self) -> None:
-        """Save the object to cache"""
-        pass
+    #     shutil.move(old_folder, old_folder.parent / new_folder_name)
+    #     print(f"Renamed {old_folder_name} to {new_folder_name}")
