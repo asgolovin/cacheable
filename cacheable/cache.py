@@ -32,7 +32,8 @@ class Cacheable(ABC):
 
     def __init__(self, run_tag=""):
         self.run_tag = run_tag
-        self.name = self.__class__.__name__
+        # convert class name to snake_case
+        self.name = re.sub(r"(?<!^)(?=[A-Z])", "_", self.__class__.__name__).lower()
         self.logger = logging.getLogger("cache")
 
     def compute(self):
